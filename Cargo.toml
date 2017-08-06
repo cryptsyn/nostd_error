@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["wmiller848 <wmiller848@users.noreply.github.com>"]
 
 [lib]
-crate-type = ["rlib"]
+crate-type = ["lib"]
 
 [profile.dev]
 opt-level = 0
