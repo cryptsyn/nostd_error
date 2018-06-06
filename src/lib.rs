@@ -9,34 +9,6 @@
 // except according to those terms.
 
 //! Traits for working with Errors.
-//!
-//! # The `Error` trait
-//!
-//! `Error` is a trait representing the basic expectations for error values,
-//! i.e. values of type `E` in [`Result<T, E>`]. At a minimum, errors must provide
-//! a description, but they may optionally provide additional detail (via
-//! [`Display`]) and cause chain information:
-//!
-//! ```
-//! use std::fmt::Display;
-//!
-//! trait Error: Display {
-//!     fn description(&self) -> &str;
-//!
-//!     fn cause(&self) -> Option<&Error> { None }
-//! }
-//! ```
-//!
-//! The [`cause`] method is generally used when errors cross "abstraction
-//! boundaries", i.e.  when a one module must report an error that is "caused"
-//! by an error from a lower-level module. This setup makes it possible for the
-//! high-level module to provide its own errors that do not commit to any
-//! particular implementation, but also reveal some of its implementation for
-//! debugging via [`cause`] chains.
-//!
-//! [`Result<T, E>`]: ../result/enum.Result.html
-//! [`Display`]: ../fmt/trait.Display.html
-//! [`cause`]: trait.Error.html#method.cause
 
 // A note about crates and the facade:
 //
@@ -60,47 +32,66 @@
 #![feature(allocator_api)]
 #![feature(int_error_internals)]
 #![feature(char_error_internals)]
+#![feature(fixed_size_array)]
+#![feature(array_error_internals)]
 
 extern crate alloc;
 
-use any::TypeId;
-use core::any;
+use core::any::TypeId;
+use alloc::borrow::Cow;
 use core::cell;
 use core::char;
+use core::array;
 use core::fmt::{self, Debug, Display};
+use alloc::heap::{AllocErr, LayoutErr, CannotReallocInPlace};
 use core::mem::transmute;
 use core::num;
 use core::str;
-use alloc::allocator;
 use alloc::string;
 use alloc::string::String;
 use alloc::boxed::Box;
 
-/// Base functionality for all errors in Rust.
+
+/// `Error` is a trait representing the basic expectations for error values,
+/// i.e. values of type `E` in [`Result<T, E>`]. Errors must describe
+/// themselves through the [`Display`] and [`Debug`] traits, and may provide
+/// cause chain information:
+///
+/// The [`cause`] method is generally used when errors cross "abstraction
+/// boundaries", i.e.  when a one module must report an error that is "caused"
+/// by an error from a lower-level module. This setup makes it possible for the
+/// high-level module to provide its own errors that do not commit to any
+/// particular implementation, but also reveal some of its implementation for
+/// debugging via [`cause`] chains.
+///
+/// [`Result<T, E>`]: ../result/enum.Result.html
+/// [`Display`]: ../fmt/trait.Display.html
+/// [`cause`]: trait.Error.html#method.cause
 pub trait Error: Debug + Display {
-    /// A short description of the error.
+    /// **This method is soft-deprecated.**
     ///
-    /// The description should only be used for a simple message.
-    /// It should not contain newlines or sentence-ending punctuation,
-    /// to facilitate embedding in larger user-facing strings.
-    /// For showing formatted error messages with more information see
-    /// [`Display`].
+    /// Although using it won’t cause compilation warning,
+    /// new code should use [`Display`] instead
+    /// and new `impl`s can omit it.
+    ///
+    /// To obtain error description as a string, use `to_string()`.
     ///
     /// [`Display`]: ../fmt/trait.Display.html
     ///
     /// # Examples
     ///
     /// ```
-    /// use std::error::Error;
-    ///
     /// match "xc".parse::<u32>() {
     ///     Err(e) => {
-    ///         println!("Error: {}", e.description());
+    ///         // Print `e` itself, not `e.description()`.
+    ///         println!("Error: {}", e);
     ///     }
     ///     _ => println!("No error"),
     /// }
     /// ```
-    fn description(&self) -> &str;
+    fn description(&self) -> &str {
+        "description() is deprecated; use Display"
+    }
 
     /// The lower-level cause of this error, if any.
     ///
@@ -226,21 +217,39 @@ impl<'a> From<&'a str> for Box<Error> {
     }
 }
 
+impl<'a, 'b> From<Cow<'b, str>> for Box<Error + Send + Sync + 'a> {
+    fn from(err: Cow<'b, str>) -> Box<Error + Send + Sync + 'a> {
+        From::from(String::from(err))
+    }
+}
+
+impl<'a> From<Cow<'a, str>> for Box<Error> {
+    fn from(err: Cow<'a, str>) -> Box<Error> {
+        From::from(String::from(err))
+    }
+}
+
 impl Error for ! {
     fn description(&self) -> &str {
         *self
     }
 }
 
-impl Error for allocator::AllocErr {
+impl Error for AllocErr {
     fn description(&self) -> &str {
-        allocator::AllocErr::description(self)
+        "memory allocation failed"
     }
 }
 
-impl Error for allocator::CannotReallocInPlace {
+impl Error for LayoutErr {
     fn description(&self) -> &str {
-        allocator::CannotReallocInPlace::description(self)
+        "invalid parameters to Layout::from_size_align"
+    }
+}
+
+impl Error for CannotReallocInPlace {
+    fn description(&self) -> &str {
+        CannotReallocInPlace::description(self)
     }
 }
 
@@ -268,6 +277,12 @@ impl Error for num::TryFromIntError {
     }
 }
 
+impl Error for array::TryFromSliceError {
+    fn description(&self) -> &str {
+        self.__description()
+    }
+}
+
 impl Error for num::ParseFloatError {
     fn description(&self) -> &str {
         self.__description()
@@ -289,6 +304,12 @@ impl Error for string::FromUtf16Error {
 impl Error for string::ParseError {
     fn description(&self) -> &str {
         match *self {}
+    }
+}
+
+impl Error for char::DecodeUtf16Error {
+    fn description(&self) -> &str {
+        "unpaired surrogate found"
     }
 }
 
@@ -331,7 +352,6 @@ impl Error for char::ParseCharError {
         self.__description()
     }
 }
-
 
 // copied from any.rs
 impl Error + 'static {
@@ -485,7 +505,7 @@ mod tests {
     #[test]
     fn downcasting() {
         let mut a = A;
-        let mut a = &mut a as &mut (Error + 'static);
+        let a = &mut a as &mut (Error + 'static);
         assert_eq!(a.downcast_ref::<A>(), Some(&A));
         assert_eq!(a.downcast_ref::<B>(), None);
         assert_eq!(a.downcast_mut::<A>(), Some(&mut A));
