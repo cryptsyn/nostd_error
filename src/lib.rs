@@ -472,6 +472,8 @@ impl Error + Send + Sync {
 
 #[cfg(test)]
 mod tests {
+    use alloc::boxed::Box;
+
     use super::Error;
     use fmt;
 
