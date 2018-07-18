@@ -43,7 +43,7 @@ use core::cell;
 use core::char;
 use core::array;
 use core::fmt::{self, Debug, Display};
-use alloc::heap::{AllocErr, LayoutErr, CannotReallocInPlace};
+use core::alloc::{AllocErr, LayoutErr, CannotReallocInPlace};
 use core::mem::transmute;
 use core::num;
 use core::str;
